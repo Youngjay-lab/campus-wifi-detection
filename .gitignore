@@ -1,0 +1,20 @@
+# Python virtual environment
+venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+
+# Local databases
+*.db
+*.sqlite3
+
+# Sensitive packet captures
+data/pcap/*
+!data/pcap/.gitkeep
+
+# Generated reports
+reports/*
