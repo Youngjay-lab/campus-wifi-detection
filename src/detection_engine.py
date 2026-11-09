@@ -15,6 +15,7 @@ def classify_network(network, authorized_access_points):
 
     observed_ssid = network["SSID"]
     observed_bssid = network["BSSID"]
+    observed_channel = network["Channel"]
 
     # Find an authorized record with the same BSSID.
     matching_bssid = next(
@@ -34,15 +35,30 @@ def classify_network(network, authorized_access_points):
     # Case 1: BSSID is registered.
     if matching_bssid:
 
-        if matching_bssid["ssid"] == observed_ssid:
-            classification = "AUTHORIZED AP"
-            reason = "BSSID and SSID match the authorized registry."
+        problems = []
+
+        # Check whether the SSID matches.
+        if matching_bssid["ssid"] != observed_ssid:
+            problems.append("Registered BSSID is broadcasting an unexpected SSID.")
+
+        # Check whether the channel matches.
+        if (
+            observed_channel is not None
+            and observed_channel != matching_bssid["channel"]
+        ):
+            problems.append(
+                f"Registered BSSID is broadcasting on channel "
+                f"{observed_channel} instead of its registered "
+                f"channel {matching_bssid['channel']}."
+            )
+
+        if problems:
+            classification = "SUSPICIOUS CONFIGURATION"
+            reason = " ".join(problems)
 
         else:
-            classification = "SUSPICIOUS CONFIGURATION"
-            reason = (
-                "Registered BSSID is broadcasting an unexpected SSID."
-            )
+            classification = "AUTHORIZED AP"
+            reason = "BSSID, SSID and channel match the authorized registry."
 
     # Case 2: BSSID is unknown but SSID belongs to an authorized network.
     elif matching_ssid:
@@ -61,8 +77,9 @@ def classify_network(network, authorized_access_points):
 
     return {
         "SSID": observed_ssid,
+        "SSID Visibility": network["SSID Visibility"],
         "BSSID": observed_bssid,
-        "Channel": network["Channel"],
+        "Channel": observed_channel,
         "Signal Strength (dBm)": network["Signal Strength (dBm)"],
         "Frame Type": network["Frame Type"],
         "Classification": classification,
