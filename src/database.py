@@ -13,6 +13,18 @@ DATABASE_PATH = PROJECT_DIR / "data" / "campus_wifi.db"
 
 VALID_CHANNELS = set(range(1, 15))
 
+INCIDENT_SEVERITIES = {
+    "UNKNOWN AP": "MEDIUM",
+    "POTENTIAL EVIL TWIN": "HIGH",
+    "SUSPICIOUS CONFIGURATION": "HIGH"
+}
+
+VALID_INCIDENT_STATUSES = {
+    "Open",
+    "Investigating",
+    "Resolved"
+}
+
 
 # --------------------------------------------------
 # DATABASE CONNECTION
@@ -69,7 +81,7 @@ def validate_access_point(ssid, bssid, location, channel):
 # --------------------------------------------------
 
 def create_tables():
-    """Create the authorized access point table."""
+    """Create the authorized AP and security incident tables."""
 
     connection = connect_db()
 
@@ -89,10 +101,33 @@ def create_tables():
             )
         """)
 
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS security_incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ssid TEXT,
+                bssid TEXT NOT NULL,
+                channel INTEGER,
+                signal_strength INTEGER,
+                frame_type TEXT,
+                classification TEXT NOT NULL,
+                severity TEXT NOT NULL
+                    CHECK(severity IN ('LOW', 'MEDIUM', 'HIGH')),
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Open'
+                    CHECK(status IN (
+                        'Open',
+                        'Investigating',
+                        'Resolved'
+                    )),
+                detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         connection.commit()
 
         print("Database initialized successfully!")
-        print("Authorized access point table created.")
+        print("Authorized access point table ready.")
+        print("Security incident table ready.")
 
     finally:
         connection.close()
@@ -193,6 +228,141 @@ def deactivate_access_point(bssid):
             return True
 
         print(f"Access point {bssid} was not found.")
+        return False
+
+    finally:
+        connection.close()
+
+
+# --------------------------------------------------
+# LOG SECURITY INCIDENT
+# --------------------------------------------------
+
+def log_incident(network):
+    """Save a suspicious access point detection as an incident."""
+
+    classification = network.get("Classification")
+
+    if classification not in INCIDENT_SEVERITIES:
+        return False
+
+    bssid = network.get("BSSID")
+
+    if not isinstance(bssid, str):
+        raise ValueError("Incident BSSID must be a string.")
+
+    bssid = bssid.strip().lower()
+
+    mac_pattern = r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$"
+
+    if not re.fullmatch(mac_pattern, bssid):
+        raise ValueError("Invalid incident BSSID.")
+
+    severity = INCIDENT_SEVERITIES[classification]
+
+    connection = connect_db()
+
+    try:
+
+        connection.execute("""
+            INSERT INTO security_incidents (
+                ssid,
+                bssid,
+                channel,
+                signal_strength,
+                frame_type,
+                classification,
+                severity,
+                reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            network.get("SSID"),
+            bssid,
+            network.get("Channel"),
+            network.get("Signal Strength (dBm)"),
+            network.get("Frame Type"),
+            classification,
+            severity,
+            network.get("Reason", "No reason provided.")
+        ))
+
+        connection.commit()
+
+        return True
+
+    finally:
+        connection.close()
+
+
+# --------------------------------------------------
+# RETRIEVE SECURITY INCIDENTS
+# --------------------------------------------------
+
+def get_incidents(status=None):
+    """Retrieve security incidents, optionally filtering by status."""
+
+    if status is not None and status not in VALID_INCIDENT_STATUSES:
+        raise ValueError("Invalid incident status.")
+
+    connection = connect_db()
+
+    try:
+
+        if status:
+
+            records = connection.execute("""
+                SELECT *
+                FROM security_incidents
+                WHERE status = ?
+                ORDER BY detected_at DESC, id DESC
+            """, (status,)).fetchall()
+
+        else:
+
+            records = connection.execute("""
+                SELECT *
+                FROM security_incidents
+                ORDER BY detected_at DESC, id DESC
+            """).fetchall()
+
+        return [dict(record) for record in records]
+
+    finally:
+        connection.close()
+
+
+# --------------------------------------------------
+# UPDATE INCIDENT STATUS
+# --------------------------------------------------
+
+def update_incident_status(incident_id, new_status):
+    """Update the status of an existing security incident."""
+
+    if not isinstance(incident_id, int) or isinstance(incident_id, bool):
+        raise ValueError("Incident ID must be an integer.")
+
+    if incident_id <= 0:
+        raise ValueError("Incident ID must be positive.")
+
+    if new_status not in VALID_INCIDENT_STATUSES:
+        raise ValueError("Invalid incident status.")
+
+    connection = connect_db()
+
+    try:
+
+        cursor = connection.execute("""
+            UPDATE security_incidents
+            SET status = ?
+            WHERE id = ?
+        """, (new_status, incident_id))
+
+        connection.commit()
+
+        if cursor.rowcount > 0:
+            return True
+
         return False
 
     finally:

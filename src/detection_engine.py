@@ -3,7 +3,7 @@ import sys
 
 from scapy.all import rdpcap, Dot11
 
-from database import get_authorized_access_points
+from database import get_authorized_access_points, log_incident
 from packet_analyzer import extract_network_information
 
 
@@ -37,11 +37,11 @@ def classify_network(network, authorized_access_points):
 
         problems = []
 
-        # Check whether the SSID matches.
         if matching_bssid["ssid"] != observed_ssid:
-            problems.append("Registered BSSID is broadcasting an unexpected SSID.")
+            problems.append(
+                "Registered BSSID is broadcasting an unexpected SSID."
+            )
 
-        # Check whether the channel matches.
         if (
             observed_channel is not None
             and observed_channel != matching_bssid["channel"]
@@ -58,9 +58,11 @@ def classify_network(network, authorized_access_points):
 
         else:
             classification = "AUTHORIZED AP"
-            reason = "BSSID, SSID and channel match the authorized registry."
+            reason = (
+                "BSSID, SSID and channel match the authorized registry."
+            )
 
-    # Case 2: BSSID is unknown but SSID belongs to an authorized network.
+    # Case 2: Unknown BSSID but authorized SSID.
     elif matching_ssid:
 
         classification = "POTENTIAL EVIL TWIN"
@@ -73,7 +75,9 @@ def classify_network(network, authorized_access_points):
     else:
 
         classification = "UNKNOWN AP"
-        reason = "BSSID and SSID are not found in the authorized registry."
+        reason = (
+            "BSSID and SSID are not found in the authorized registry."
+        )
 
     return {
         "SSID": observed_ssid,
@@ -98,7 +102,7 @@ def analyze_and_classify_pcap(file_path):
         print(f"Error: PCAP file not found: {file_path}")
         return
 
-    # Load authorized access points from SQLite.
+    # Load authorized access points.
     authorized_access_points = get_authorized_access_points()
 
     print(
@@ -113,6 +117,9 @@ def analyze_and_classify_pcap(file_path):
 
     detected_networks = []
 
+    # Prevent duplicate incident records within one PCAP analysis.
+    logged_incidents = set()
+
     for packet in packets:
 
         if not packet.haslayer(Dot11):
@@ -121,12 +128,34 @@ def analyze_and_classify_pcap(file_path):
         network = extract_network_information(packet)
 
         if network:
+
             result = classify_network(
                 network,
                 authorized_access_points
             )
 
             detected_networks.append(result)
+
+            # Automatically log every non-authorized classification.
+            if result["Classification"] != "AUTHORIZED AP":
+
+                incident_key = (
+                    result["BSSID"].lower(),
+                    result["Classification"],
+                    result["Reason"]
+                )
+
+                if incident_key not in logged_incidents:
+
+                    log_incident(result)
+
+                    logged_incidents.add(incident_key)
+
+                    print(
+                        f"\n[INCIDENT LOGGED] "
+                        f"{result['Classification']} - "
+                        f"{result['BSSID']}"
+                    )
 
     print("\nACCESS POINT DETECTION RESULTS")
     print("=" * 60)
@@ -159,6 +188,11 @@ def analyze_and_classify_pcap(file_path):
         )
 
         print(f"{classification}: {count}")
+
+    print(
+        f"\nNew incidents logged during this analysis: "
+        f"{len(logged_incidents)}"
+    )
 
     print("\nDetection analysis completed.")
 
